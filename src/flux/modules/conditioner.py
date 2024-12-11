@@ -13,8 +13,9 @@ class HFEmbedder(nn.Module):
             self.tokenizer: CLIPTokenizer = CLIPTokenizer.from_pretrained(version, max_length=max_length)
             self.hf_module: CLIPTextModel = CLIPTextModel.from_pretrained(version, **hf_kwargs)
         else:
-            self.tokenizer: T5Tokenizer = T5Tokenizer.from_pretrained(version, max_length=max_length)
-            self.hf_module: T5EncoderModel = T5EncoderModel.from_pretrained(version, **hf_kwargs)
+            self.tokenizer: T5Tokenizer = T5Tokenizer.from_pretrained(version, subfolder="tokenizer_2", max_length=max_length)
+            self.hf_module: T5EncoderModel  = T5EncoderModel.from_pretrained(version, subfolder="text_encoder_2",  **hf_kwargs).to("cpu") 
+    
 
         self.hf_module = self.hf_module.eval().requires_grad_(False)
 

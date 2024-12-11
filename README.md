@@ -1,9 +1,28 @@
-# FLUX
+# FLUX FILL
 by Black Forest Labs: https://blackforestlabs.ai. Documentation for our API can be found here: [docs.bfl.ml](https://docs.bfl.ml/).
-
 ![grid](assets/grid.jpg)
 
-This repo contains minimal inference code to run image generation & editing with our Flux models.
+## Flux Fill bug fixing, improvements and support for memory poor GPUs (24GB) by Deepbeepmeep.
+This fork of Flux Fill is an illustration on how one can set up on an existing model some fast and properly working CPU offloading with very few changes in the core model.
+
+For more information on how to use the mmpg module, please go to: https://github.com/deepbeepmeep/mmgp
+
+
+Beside the support for 24 GB VRAM GPU with fast generation of images, I did a few improvements to the Flux Fill tool:
+- bug fixing
+- progression bar
+- automatic resizing of large images
+- user interface streamlined
+
+
+Once the installation is done (see instructions below), run the Flux Fill tool with the command:
+
+```bash
+streamlit run demo_st_fill.py
+```
+A minimum of 48 GB in your RAM is needed to run this tool.
+
+If you have more than 64 GB RAM you can set the option *pinInRAM = True* on line 85 of file demo_st_fill.py
 
 ## Local installation
 

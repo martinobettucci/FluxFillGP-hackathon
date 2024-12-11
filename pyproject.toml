@@ -22,11 +22,13 @@ dependencies = [
   "requests",
   "invisible-watermark",
   "ruff == 0.6.8",
+  "optimum-quanto",
+  "mmgp"
 ]
 
 [project.optional-dependencies]
 streamlit = [
-  "streamlit",
+  "streamlit==1.40.1",
   "streamlit-drawable-canvas",
   "streamlit-keyup",
 ]

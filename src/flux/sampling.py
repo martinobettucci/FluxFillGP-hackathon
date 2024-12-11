@@ -105,13 +105,12 @@ def prepare_control(
 
 
 def prepare_fill(
-    t5: HFEmbedder,
-    clip: HFEmbedder,
     img: Tensor,
     prompt: str | list[str],
     ae: AutoEncoder,
     img_cond_path: str,
     mask_path: str,
+    return_dict: dict[str, Tensor]
 ) -> dict[str, Tensor]:
     # load and encode the conditioning image and the mask
     bs, _, _, _ = img.shape
@@ -152,7 +151,6 @@ def prepare_fill(
 
     img_cond = torch.cat((img_cond, mask), dim=-1)
 
-    return_dict = prepare(t5, clip, img, prompt)
     return_dict["img_cond"] = img_cond.to(img.device)
     return return_dict
 
@@ -237,7 +235,7 @@ def get_schedule(
 
     return timesteps.tolist()
 
-
+from tqdm import tqdm
 def denoise(
     model: Flux,
     # model input
@@ -246,6 +244,7 @@ def denoise(
     txt: Tensor,
     txt_ids: Tensor,
     vec: Tensor,
+    progress_callback,
     # sampling parameters
     timesteps: list[float],
     guidance: float = 4.0,
@@ -254,7 +253,10 @@ def denoise(
 ):
     # this is ignored for schnell
     guidance_vec = torch.full((img.shape[0],), guidance, device=img.device, dtype=img.dtype)
-    for t_curr, t_prev in zip(timesteps[:-1], timesteps[1:]):
+    i = 0
+    for t_curr, t_prev in tqdm(zip(timesteps[:-1], timesteps[1:]), desc="Denoising", total = len(timesteps)-1 ):
+        i=i+1
+        progress_callback(i/(len(timesteps)-1))
         t_vec = torch.full((img.shape[0],), t_curr, dtype=img.dtype, device=img.device)
         pred = model(
             img=torch.cat((img, img_cond), dim=-1) if img_cond is not None else img,

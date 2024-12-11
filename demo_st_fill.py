@@ -14,11 +14,11 @@ from st_keyup import st_keyup
 from streamlit_drawable_canvas import st_canvas
 from transformers import pipeline
 
-from flux.sampling import denoise, get_noise, get_schedule, prepare_fill, unpack
+from flux.sampling import denoise, get_noise, get_schedule, prepare, prepare_fill, unpack
 from flux.util import embed_watermark, load_ae, load_clip, load_flow_model, load_t5
 
 NSFW_THRESHOLD = 0.85
-
+MAXMP = 4 #Max limit in MegaPixels for output image
 
 def add_border_and_mask(image, zoom_all=1.0, zoom_left=0, zoom_right=0, zoom_up=0, zoom_down=0, overlap=0):
     """Adds a black border around the image with individual side control and mask overlap"""
@@ -73,12 +73,64 @@ def add_border_and_mask(image, zoom_all=1.0, zoom_left=0, zoom_right=0, zoom_up=
 
 @st.cache_resource()
 def get_models(name: str, device: torch.device, offload: bool):
+    from mmgp import offload
     t5 = load_t5(device, max_length=128)
+    if offload: t5.to("cpu")
     clip = load_clip(device)
-    model = load_flow_model(name, device="cpu" if offload else device)
+    model = load_flow_model(name, "cpu")
     ae = load_ae(name, device="cpu" if offload else device)
-    nsfw_classifier = pipeline("image-classification", model="Falconsai/nsfw_image_detection", device=device)
+
+    pipe = { "text_encoder": clip, "text_encoder_2": t5, "transformer": model, "vae":ae }
+    #offload.all(pipe, pinInRAM = True) # uncomment this line and comment the next one if have more than 64 GB and needs even faster model swapping
+    offload.all(pipe)
+    
+    # print("Flux Quantization started")
+    # quantize(model, weights=qint8)
+    # freeze(model)
+    # print("Flux Quantization done")
+    # if offload: 
+    #     import gc
+    #     model.to("cpu")
+    #     torch.cuda.empty_cache() # vide le cache (import torch)
+    #     gc.collect() # garbage collector Python ( import gc)
+
+
+
+        
+    nsfw_classifier = None # pipeline("image-classification", model="Falconsai/nsfw_image_detection", device=device)
     return model, ae, t5, clip, nsfw_classifier
+
+def resize2(img: Image.Image, min: int = 256, max_mp: float = 6.0) -> Image.Image:
+    width, height = img.size
+    mp = (width * height) / 1_000_000  # Current megapixels
+
+    if width >=min and height>=min and mp <= max_mp:
+        # Even if MP is in range, ensure dimensions are multiples of 32
+        new_width = int(32 * round(width / 32))
+        new_height = int(32 * round(height / 32))
+        if new_width == width and  new_height == height:
+            return img
+
+        if  new_width > width or new_height > height  :
+            return img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        else:
+            return img.resize((new_width, new_height), Image.Resampling.BILINEAR)
+            
+        return img
+
+    # Calculate scaling factor
+    if mp >= max_mp:
+        scale = (max_mp / mp) ** 0.5
+    elif width < height:
+        scale = min / width
+    else:
+        scale = min / height
+
+
+    new_width = int(32 * round(width * scale / 32))
+    new_height = int(32 * round(height * scale / 32))
+
+    return img.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
 
 def resize(img: Image.Image, min_mp: float = 0.5, max_mp: float = 2.0) -> Image.Image:
@@ -107,17 +159,35 @@ def resize(img: Image.Image, min_mp: float = 0.5, max_mp: float = 2.0) -> Image.
 
 def clear_canvas_state():
     """Clear all canvas-related state"""
-    keys_to_clear = ["canvas", "last_image_dims"]
-    for key in keys_to_clear:
-        if key in st.session_state:
-            del st.session_state[key]
+    # keys_to_clear = ["canvas", "reference_image_dims"]
+    # for key in keys_to_clear:
+    #     if key in st.session_state:
+    #         del st.session_state[key]
+
+    # for key in st.session_state:
+    #     if "canvas" in key:
+    #         del st.session_state[key]
+
+    if "version" in st.session_state: 
+        version = st.session_state["version"]
+        canvas_key = f"canvas_{version}"
+        if canvas_key in st.session_state:
+            del st.session_state[canvas_key]
+    else:
+        version = 0
+
+    st.session_state["version"] = version + 1
 
 
 def set_new_image(img: Image.Image):
     """Safely set a new image and clear relevant state"""
     st.session_state["current_image"] = img
+    if "image_scale_factor" in st.session_state:
+        del st.session_state["image_scale_factor"] 
+
     clear_canvas_state()
-    st.rerun()
+    # if rerun:
+    #     st.rerun()
 
 
 def downscale_image(img: Image.Image, scale_factor: float) -> Image.Image:
@@ -143,17 +213,19 @@ def main(
     output_dir: str = "output",
 ):
     torch_device = torch.device(device)
-    st.title("Flux Fill: Inpainting & Outpainting")
-
+    load_device = torch.device("cpu") if offload else torch.device(device)
+    st.title("Flux Fill GP: Inpainting & Outpainting for the GPU Poor")
+    st.markdown("Original tool and models by Black forest labs.")
+    st.markdown("*Bug fixing, improvements and support for consumer GPUs (24GB) by Deepbeepmeep.*")
     # Model selection and loading
     name = "flux-dev-fill"
-    if not st.checkbox("Load model", False):
-        return
+    # if not st.checkbox("Load model", False):
+    #     return
 
     try:
         model, ae, t5, clip, nsfw_classifier = get_models(
             name,
-            device=torch_device,
+            device=load_device,
             offload=offload,
         )
     except Exception as e:
@@ -163,14 +235,30 @@ def main(
     # Mode selection
     mode = st.radio("Select Mode", ["Inpainting", "Outpainting"])
 
+    if "version" in st.session_state:
+        version = st.session_state["version"]
+    else:   
+        version = 0
+
+
+    st.session_state["version"] = version  
+    def resetupload():
+        if "current_image_name" in st.session_state:
+            del st.session_state["current_image_name"]
+
+        
+    uploaded_image = st.file_uploader("Upload image", on_change = resetupload,  type=["jpg", "jpeg", "png","webp","jfif"])
+
     # Image handling - either from previous generation or new upload
     if "input_image" in st.session_state:
         image = st.session_state["input_image"]
         del st.session_state["input_image"]
+        st.session_state["reference_image"] = image
+        st.session_state["scale_factor"]= 1.0
         set_new_image(image)
-        st.write("Continuing from previous result")
+        st.session_state["image_status"]= "**Continuing from previous result**"
+
     else:
-        uploaded_image = st.file_uploader("Upload image", type=["jpg", "jpeg", "png"])
         if uploaded_image is None:
             st.warning("Please upload an image")
             return
@@ -180,8 +268,20 @@ def main(
             or st.session_state["current_image_name"] != uploaded_image.name
         ):
             try:
-                image = Image.open(uploaded_image).convert("RGB")
+                new_image = Image.open(uploaded_image).convert("RGB")
                 st.session_state["current_image_name"] = uploaded_image.name
+                #do no rerun to keep zoom and overlap parameters
+                st.session_state["Reference_Is_Generated"]= False
+                image = resize2(new_image, max_mp = MAXMP)
+                if image.width != new_image.width:
+                    st.session_state["image_status"]= f"Image has been automatically downscaled from {new_image.width}x{new_image.height} to {image.width}x{image.height} to stay within bounds (256x256 - {MAXMP}MP)"
+                    new_image = image
+                else:
+                    st.session_state["image_status"]= ""
+
+                st.session_state["reference_image"] = new_image
+                    
+                st.session_state["scale_factor"]= 1.0
                 set_new_image(image)
             except Exception as e:
                 st.error(f"Error loading image: {e}")
@@ -193,66 +293,74 @@ def main(
                 clear_canvas_state()
                 return
 
+               
+    image_status = "" if "image_status" not in st.session_state else st.session_state["image_status"] 
+    if len(image_status)>0:
+        st.write(image_status)
+
     # Add downscale control
-    with st.expander("Image Size Control"):
-        current_mp = (image.size[0] * image.size[1]) / 1_000_000
-        st.write(f"Current image size: {image.size[0]}x{image.size[1]} ({current_mp:.1f}MP)")
+    # with st.expander("Downscale image"):
+    original_image = st.session_state["reference_image"]
+    if "scale_factor" not in st.session_state:
+        st.session_state["scale_factor"] = 1
+    current_mp = (original_image.size[0] * original_image.size[1]) / 1_000_000
+    st.write(f"**Source image dimensions: {original_image.size[0]}x{original_image.size[1]} ({current_mp:.1f}MP)**")
 
-        scale_factor = st.slider(
-            "Downscale Factor",
-            min_value=0.1,
-            max_value=1.0,
-            value=1.0,
-            step=0.1,
-            help="1.0 = original size, 0.5 = half size, etc.",
-        )
+    scale_factor = st.slider(
+        "Downscale Factor",
+        min_value=0.1,
+        max_value=1.0,
+        step=0.01,
+        key="scale_factor",
+        help="1.0 = original size, 0.5 = half size, etc.",
+    )
 
-        if scale_factor < 1.0 and st.button("Apply Downscaling"):
-            image = downscale_image(image, scale_factor)
-            set_new_image(image)
-            st.rerun()
 
-    # Resize image with validation
-    try:
-        original_mp = (image.size[0] * image.size[1]) / 1_000_000
-        image = resize(image)
-        width, height = image.size
-        current_mp = (width * height) / 1_000_000
+    # if st.button("Apply Downscaling"): #scale_factor < 1.0 and
+    image_scale_factor = 0 if "image_scale_factor" not in st.session_state else st.session_state["image_scale_factor"]
+    
+    if image_scale_factor != scale_factor:
+        image = original_image
+        image = downscale_image(image, scale_factor)
+        set_new_image(image)
+        st.session_state["image_scale_factor"] = scale_factor
+       # st.session_state["image_status"]= ""
 
-        if width % 32 != 0 or height % 32 != 0:
-            st.error("Error: Image dimensions must be multiples of 32")
-            return
+    #       st.rerun()
 
-        st.write(f"Image dimensions: {width}x{height} pixels")
-        if original_mp != current_mp:
-            st.write(
-                f"Image has been resized from {original_mp:.1f}MP to {current_mp:.1f}MP to stay within bounds (0.5MP - 2MP)"
-            )
-    except Exception as e:
-        st.error(f"Error processing image: {e}")
-        return
 
+    width, height = image.size
+    st.write(f"**Current image dimensions: {width}x{height} pixels**")
+ 
     if mode == "Outpainting":
         # Outpainting controls
-        zoom_all = st.slider("Zoom Out Amount (All Sides)", min_value=1.0, max_value=3.0, value=1.0, step=0.1)
+        if st.button("Reset Zoom and Overlap Parameters") or "zoom_all" not in st.session_state:
+            st.session_state.zoom_all = 1
+            st.session_state.zoom_left = 0
+            st.session_state.zoom_right = 0
+            st.session_state.zoom_up = 0
+            st.session_state.zoom_down = 0
+            st.session_state.overlap = 0.01
+
+        zoom_all = st.slider("Zoom Out Amount (All Sides)", min_value=1.0, max_value=3.0, step=0.01, key="zoom_all")
 
         with st.expander("Advanced Zoom Controls"):
             st.info("These controls add additional zoom to specific sides")
             col1, col2 = st.columns(2)
             with col1:
-                zoom_left = st.slider("Left", min_value=0.0, max_value=1.0, value=0.0, step=0.1)
-                zoom_right = st.slider("Right", min_value=0.0, max_value=1.0, value=0.0, step=0.1)
+                zoom_left = st.slider("Left", min_value=0.0, max_value=1.0, step=0.1,key="zoom_left")
+                zoom_right = st.slider("Right", min_value=0.0, max_value=1.0,  step=0.1,key="zoom_right")
             with col2:
-                zoom_up = st.slider("Up", min_value=0.0, max_value=1.0, value=0.0, step=0.1)
-                zoom_down = st.slider("Down", min_value=0.0, max_value=1.0, value=0.0, step=0.1)
+                zoom_up = st.slider("Up", min_value=0.0, max_value=1.0,  step=0.1,key="zoom_up")
+                zoom_down = st.slider("Down", min_value=0.0, max_value=1.0,  step=0.1, key="zoom_down")
 
-        overlap = st.slider("Overlap", min_value=0.01, max_value=0.25, value=0.01, step=0.01)
+        overlap = st.slider("Overlap", min_value=0.01, max_value=0.25,  step=0.01,key="overlap")
 
         # Generate bordered image and mask
         image_for_generation, mask = add_border_and_mask(
             image,
             zoom_all=zoom_all,
-            zoom_left=zoom_left,
+            zoom_left=zoom_left,    
             zoom_right=zoom_right,
             zoom_up=zoom_up,
             zoom_down=zoom_down,
@@ -269,13 +377,15 @@ def main(
 
     else:  # Inpainting mode
         # Canvas setup with dimension tracking
-        canvas_key = f"canvas_{width}_{height}"
-        if "last_image_dims" not in st.session_state:
-            st.session_state.last_image_dims = (width, height)
-        elif st.session_state.last_image_dims != (width, height):
-            clear_canvas_state()
-            st.session_state.last_image_dims = (width, height)
-            st.rerun()
+        version = st.session_state["version"]
+        #canvas_key = f"canvas_{width}_{height}_{version}"
+        canvas_key = f"canvas_{version}"
+        # if "reference_image_dims" not in st.session_state:
+        #     st.session_state.reference_image_dims = (width, height)
+        # elif st.session_state.reference_image_dims != (width, height):
+        #     clear_canvas_state()
+        #     st.session_state.reference_image_dims = (width, height)
+        #     st.rerun()
 
         try:
             canvas_result = st_canvas(
@@ -294,6 +404,31 @@ def main(
             clear_canvas_state()
             st.rerun()
             return
+        image_for_generation = image
+       
+    try:
+        original_width= image_for_generation.width
+        original_height= image_for_generation.height
+        original_mp = (image_for_generation.size[0] * image_for_generation.size[1]) / 1_000_000
+        image_for_generation = resize2(image_for_generation, max_mp= MAXMP)
+
+        width, height = image_for_generation.size
+        current_mp = (width * height) / 1_000_000
+
+        if width % 32 != 0 or height % 32 != 0:
+            st.error("Error: Image dimensions must be multiples of 32")
+            return
+
+        if original_mp != current_mp:
+            st.write(
+                f"Image will be resized from {original_width}x{original_height} to {width}x{height} to stay within bounds (256x256 - {MAXMP}MP)"
+            )
+
+        st.write(f"**Target image dimensions: {width}x{height} pixels**")
+
+    except Exception as e:
+        st.error(f"Error processing image: {e}")
+        return        
 
     # Sampling parameters
     num_steps = int(st.number_input("Number of steps", min_value=1, value=50))
@@ -320,6 +455,8 @@ def main(
         fns = [fn for fn in iglob(output_name.format(idx="*")) if re.search(r"img_[0-9]+\.jpg$", fn)]
         idx = len(fns)
 
+
+
     if st.button("Generate"):
         valid_input = False
 
@@ -332,7 +469,6 @@ def main(
                 mask_array = np.array(mask)
                 mask_array = (mask_array > 0).astype(np.uint8) * 255
                 mask = Image.fromarray(mask_array)
-                image_for_generation = image
             except Exception as e:
                 st.error(f"Error creating mask: {e}")
                 return
@@ -344,6 +480,10 @@ def main(
         if not valid_input:
             st.error("Please draw a mask or configure outpainting settings")
             return
+
+        # Resize image
+        image_for_generation = resize2(image_for_generation, max_mp= MAXMP)
+        mask = resize2(mask,max_mp = MAXMP)
 
         # Create temporary files
         with (
@@ -366,6 +506,8 @@ def main(
                 print(f"Generating with seed {seed}:\n{prompt}")
                 t0 = time.perf_counter()
 
+                placeholder = st.empty()
+                placeholder.write("Initializing...")
                 x = get_noise(
                     1,
                     height,
@@ -375,49 +517,50 @@ def main(
                     seed=seed,
                 )
 
-                if offload:
-                    t5, clip, ae = t5.to(torch_device), clip.to(torch_device), ae.to(torch_device)
+                placeholder.write("Encoding prompt...")
+                inp = prepare(t5, clip, x, prompt)
 
+                placeholder.write("Encoding image...")
                 inp = prepare_fill(
-                    t5,
-                    clip,
                     x,
                     prompt=prompt,
                     ae=ae,
                     img_cond_path=tmp_img.name,
                     mask_path=tmp_mask.name,
+                    return_dict = inp
                 )
 
                 timesteps = get_schedule(num_steps, inp["img"].shape[1], shift=True)
+ 
+                progress_text = "Denoising..."
+                my_bar = placeholder.progress(0, text=progress_text)
 
-                if offload:
-                    t5, clip, ae = t5.cpu(), clip.cpu(), ae.cpu()
-                    torch.cuda.empty_cache()
-                    model = model.to(torch_device)
+                def progress_noise(percent_complete):
+                    my_bar.progress(percent_complete, text=progress_text)
+                    
+                x = denoise(model, **inp, timesteps=timesteps, guidance=guidance, progress_callback =progress_noise)
 
-                x = denoise(model, **inp, timesteps=timesteps, guidance=guidance)
-
-                if offload:
-                    model.cpu()
-                    torch.cuda.empty_cache()
-                    ae.decoder.to(x.device)
-
+                placeholder.write("Decoding latents...")
                 x = unpack(x.float(), height, width)
                 with torch.autocast(device_type=torch_device.type, dtype=torch.bfloat16):
                     x = ae.decode(x)
 
                 t1 = time.perf_counter()
                 print(f"Done in {t1 - t0:.1f}s")
+                placeholder.write(f"Done in {t1 - t0:.1f}s")
 
                 # Process and display result
                 x = x.clamp(-1, 1)
                 x = embed_watermark(x.float())
                 x = rearrange(x[0], "c h w -> h w c")
                 img = Image.fromarray((127.5 * (x + 1.0)).cpu().byte().numpy())
+                x = None
+                import gc
+                gc.collect()
 
-                nsfw_score = [x["score"] for x in nsfw_classifier(img) if x["label"] == "nsfw"][0]
+                #nsfw_score = [x["score"] for x in nsfw_classifier(img) if x["label"] == "nsfw"][0]
 
-                if nsfw_score < NSFW_THRESHOLD:
+                if True: #nsfw_score < NSFW_THRESHOLD:
                     buffer = BytesIO()
                     exif_data = Image.Exif()
                     exif_data[ExifTags.Base.Software] = "AI generated;inpainting;flux"
@@ -425,7 +568,7 @@ def main(
                     exif_data[ExifTags.Base.Model] = name
                     if add_sampling_metadata:
                         exif_data[ExifTags.Base.ImageDescription] = prompt
-                    img.save(buffer, format="jpeg", exif=exif_data, quality=95, subsampling=0)
+                    img.save(buffer, format="jpeg", exif=exif_data, quality=98, subsampling=0)
 
                     img_bytes = buffer.getvalue()
                     if save_samples:
@@ -469,14 +612,17 @@ def main(
             )
         with col2:
             if st.button("Continue from this image"):
-                # Store the generated image
-                new_image = samples["img"]
                 # Clear ALL canvas state
                 clear_canvas_state()
+                # Store the generated image
+                new_image = samples["img"]
                 if "samples" in st.session_state:
                     del st.session_state["samples"]
                 # Set as current image
-                st.session_state["current_image"] = new_image
+                st.session_state["input_image"] = new_image
+#                st.session_state["current_image"] = new_image
+                st.session_state["reference_image"] = new_image
+
                 st.rerun()
 
         st.write(f"Seed: {samples['seed']}")
@@ -484,4 +630,4 @@ def main(
 
 if __name__ == "__main__":
     st.set_page_config(layout="wide")
-    main()
+    main(offload = True)
