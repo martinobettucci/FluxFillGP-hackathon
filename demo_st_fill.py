@@ -74,7 +74,7 @@ def add_border_and_mask(image, zoom_all=1.0, zoom_left=0, zoom_right=0, zoom_up=
 
 @st.cache_resource()
 def get_models(name: str, device: torch.device, offload: bool):
-    offloadobj.default_verboseLevel = 2
+    # offloadobj.default_verboseLevel = 2
 
     t5 = load_t5(device, max_length=128)
     #if offload: t5.to("cpu")
