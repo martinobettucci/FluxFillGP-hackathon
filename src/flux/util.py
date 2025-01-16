@@ -320,14 +320,18 @@ def load_flow_model(
     print("Init model")
     ckpt_path = configs[name].ckpt_path
     lora_path = configs[name].lora_path
-    if (
-        ckpt_path is None
-        and configs[name].repo_id is not None
-        and configs[name].repo_flow is not None
-        and hf_download
-    ):
-        ckpt_path = hf_hub_download(configs[name].repo_id, configs[name].repo_flow)
+    # if (
+    #     ckpt_path is None
+    #     and configs[name].repo_id is not None
+    #     and configs[name].repo_flow is not None
+    #     and hf_download
+    # ):
+    #     ckpt_path = hf_hub_download(configs[name].repo_id, configs[name].repo_flow)
+    from mmgp import offload as offloadobj
 
+    ckpt_path = "DeepBeepMeep/FluxFillGP/transformer/FluxFill_1_quanto_int8.safetensors"  # uncomment this line to download a prequantized model
+    #ckpt_path = "DeepBeepMeep/FluxFillGP/transformer/FluxFill_1.safetensors"
+    
     with torch.device("meta" if ckpt_path is not None else device):
         if lora_path is not None:
             model = FluxLoraWrapper(params=configs[name].params).to(torch.bfloat16)
@@ -337,11 +341,14 @@ def load_flow_model(
     if ckpt_path is not None:
         print("Loading checkpoint")
         # load_sft doesn't support torch.device
-        sd = load_sft(ckpt_path, device=str(device))
-        sd = optionally_expand_state_dict(model, sd)
-        missing, unexpected = model.load_state_dict(sd, strict=False, assign=True)
-        if verbose:
-            print_load_warning(missing, unexpected)
+        # ckpt_path = hf_hub_download(configs[name].repo_id, configs[name].repo_flow)
+
+        offloadobj.load_model_data(model, ckpt_path)
+        # sd = load_sft(ckpt_path, device=str(device))
+        # sd = optionally_expand_state_dict(model, sd)
+        # missing, unexpected = model.load_state_dict(sd, strict=False, assign=True)
+        # if verbose:
+        #     print_load_warning(missing, unexpected)
 
     if configs[name].lora_path is not None:
         print("Loading LoRA")
@@ -355,7 +362,8 @@ def load_flow_model(
 
 def load_t5(device: str | torch.device = "cuda", max_length: int = 512) -> HFEmbedder:
     # max length 64, 128, 256 and 512 should work (if your sequence is short enough)
-    return HFEmbedder("black-forest-labs/FLUX.1-dev", max_length=max_length, torch_dtype=torch.bfloat16).to(device)
+#    return HFEmbedder("black-forest-labs/FLUX.1-dev", max_length=max_length, torch_dtype=torch.float32).to(device)
+    return HFEmbedder("DeepBeepMeep/FluxFillGP", max_length=max_length, torch_dtype=torch.bfloat16).to(device)
 
 
 def load_clip(device: str | torch.device = "cuda") -> HFEmbedder:
@@ -370,8 +378,8 @@ def load_ae(name: str, device: str | torch.device = "cuda", hf_download: bool = 
         and configs[name].repo_ae is not None
         and hf_download
     ):
-        ckpt_path = hf_hub_download(configs[name].repo_id, configs[name].repo_ae)
-
+        # ckpt_path = hf_hub_download(configs[name].repo_id, configs[name].repo_ae)
+        ckpt_path = hf_hub_download("DeepBeepMeep/FluxFillGP", "ae.safetensors", subfolder="vae")
     # Loading the autoencoder
     print("Init AE")
     with torch.device("meta" if ckpt_path is not None else device):

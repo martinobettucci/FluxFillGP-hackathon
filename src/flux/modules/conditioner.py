@@ -13,8 +13,18 @@ class HFEmbedder(nn.Module):
             self.tokenizer: CLIPTokenizer = CLIPTokenizer.from_pretrained(version, max_length=max_length)
             self.hf_module: CLIPTextModel = CLIPTextModel.from_pretrained(version, **hf_kwargs)
         else:
+            from mmgp import offload as offloadobj
+
             self.tokenizer: T5Tokenizer = T5Tokenizer.from_pretrained(version, subfolder="tokenizer_2", max_length=max_length)
-            self.hf_module: T5EncoderModel  = T5EncoderModel.from_pretrained(version, subfolder="text_encoder_2",  **hf_kwargs).to("cpu") 
+            
+            path = version + "/text_encoder_2/T5Encoder.safetensors"
+#            path = version + "/text_encoder_2/T5Encoder_quanto_int8.safetensors" # incumment this line to download a prequantized model instead
+
+            self.hf_module: T5EncoderModel  = offloadobj.fast_load_transformers_model(path) 
+
+            # self.hf_module: T5EncoderModel  = T5EncoderModel.from_pretrained(version, subfolder="text_encoder_2",  **hf_kwargs).to("cpu") 
+
+            # offloadobj.save_model(self.hf_module, "T5Encoder.safetensors", config_path = "text_encoder_2_config.json")
     
 
         self.hf_module = self.hf_module.eval().requires_grad_(False)

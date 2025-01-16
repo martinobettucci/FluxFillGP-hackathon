@@ -23,7 +23,7 @@ dependencies = [
   "invisible-watermark",
   "ruff == 0.6.8",
   "optimum-quanto",
-  "mmgp"
+  "mmgp == 3.1.0"
 ]
 
 [project.optional-dependencies]

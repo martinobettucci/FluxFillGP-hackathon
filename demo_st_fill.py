@@ -1,3 +1,4 @@
+from mmgp import offload as offloadobj
 import os
 import re
 import tempfile
@@ -73,30 +74,20 @@ def add_border_and_mask(image, zoom_all=1.0, zoom_left=0, zoom_right=0, zoom_up=
 
 @st.cache_resource()
 def get_models(name: str, device: torch.device, offload: bool):
-    from mmgp import offload
+    offloadobj.default_verboseLevel = 2
+
     t5 = load_t5(device, max_length=128)
-    if offload: t5.to("cpu")
+    #if offload: t5.to("cpu")
     clip = load_clip(device)
     model = load_flow_model(name, "cpu")
     ae = load_ae(name, device="cpu" if offload else device)
 
+
     pipe = { "text_encoder": clip, "text_encoder_2": t5, "transformer": model, "vae":ae }
-    #offload.all(pipe, pinInRAM = True) # uncomment this line and comment the next one if have more than 64 GB and needs even faster model swapping
-    offload.all(pipe)
-    
-    # print("Flux Quantization started")
-    # quantize(model, weights=qint8)
-    # freeze(model)
-    # print("Flux Quantization done")
-    # if offload: 
-    #     import gc
-    #     model.to("cpu")
-    #     torch.cuda.empty_cache() # vide le cache (import torch)
-    #     gc.collect() # garbage collector Python ( import gc)
+     
+    # offloadobj.profile(pipe, quantizeTransformer = False,  profile_no = 1 ) # uncomment this line and comment the previous one if you have 24 GB of VRAM and wants faster generation  
+    offloadobj.profile(pipe, quantizeTransformer = False,  extraModelsToQuantize = [], profile_no = 4 ) 
 
-
-
-        
     nsfw_classifier = None # pipeline("image-classification", model="Falconsai/nsfw_image_detection", device=device)
     return model, ae, t5, clip, nsfw_classifier
 
