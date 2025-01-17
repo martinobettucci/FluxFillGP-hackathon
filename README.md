@@ -38,6 +38,7 @@ cd $HOME && git clone https://github.com/black-forest-labs/flux
 cd $HOME/flux
 python3.10 -m venv .venv
 source .venv/bin/activate
+pip install torch==2.5.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/test/cu124  # or a lower version of Cuda if it is not supported by your system
 pip install -e ".[all]"
 ```
 
