@@ -587,7 +587,8 @@ def main(
                     os.unlink(tmp_img.name)
                     os.unlink(tmp_mask.name)
                 except Exception as e:
-                    print(f"Error cleaning up temporary files: {e}")
+                    pass
+                    #print(f"Error cleaning up temporary files: {e}")
 
     # Display results
     samples = st.session_state.get("samples", None)
