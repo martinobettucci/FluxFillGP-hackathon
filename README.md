@@ -43,10 +43,10 @@ pip install -e ".[all]"
 ```
 
 ### Other Models for the GPU Poor
-- HuanyuanVideoGP: https://github.com/deepbeepmeep/HunyuanVideoGP\
+- HuanyuanVideoGP: https://github.com/deepbeepmeep/HunyuanVideoGP \
 One of the best open source Text to Video generator
 
-- Cosmos1GP: https://github.com/deepbeepmeep/Cosmos1GP\
+- Cosmos1GP: https://github.com/deepbeepmeep/Cosmos1GP \
 This application include two models: a text to world generator and a image / video to world (probably the best open source image to video generator).
 
 
