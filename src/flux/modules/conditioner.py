@@ -17,8 +17,8 @@ class HFEmbedder(nn.Module):
 
             self.tokenizer: T5Tokenizer = T5Tokenizer.from_pretrained(version, subfolder="tokenizer_2", max_length=max_length)
             
-            #path = version + "/text_encoder_2/T5Encoder.safetensors"
-            path = version + "/text_encoder_2/T5Encoder_quanto_int8.safetensors" # incumment this line to download a prequantized model instead
+            path = version + "/text_encoder_2/T5Encoder.safetensors"
+            #path = version + "/text_encoder_2/T5Encoder_quanto_int8.safetensors" # incumment this line to download a prequantized model instead
 
             self.hf_module: T5EncoderModel  = offloadobj.fast_load_transformers_model(path) 
 
